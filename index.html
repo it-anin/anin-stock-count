@@ -330,7 +330,7 @@
         <div class="db-status">
           <div class="db-dot active" id="dbDot"></div>
           <span id="dbStatus" style="color:var(--text2)">Ready</span>
-          <button onclick="pullFromCloud()" style="border:1px solid var(--border);background:var(--surface2);color:var(--accent);padding:2px 8px;border-radius:6px;font-size:0.68rem;cursor:pointer;margin-left:10px;" title="ดึงข้อมูลล่าสุดจาก Cloud">Cloud</button>
+          <button id="btnCloud" onclick="pullFromCloud()" style="border:1px solid var(--border);background:var(--surface2);color:var(--accent);padding:2px 8px;border-radius:6px;font-size:0.68rem;cursor:pointer;margin-left:10px;" title="ดึงข้อมูลล่าสุดจาก Cloud">Cloud</button>
         </div>
         <div style="display:flex;/* align-items:center; */gap: 0px;">
           <span id="branchLabel" style="background:var(--accent);color:#fff;padding:5px 14px;border-radius:8px;font-size:0.6rem;font-weight:700;letter-spacing:1px;">—</span>
@@ -637,6 +637,8 @@
 
 <script>
 // ===================== Firebase / Firestore =====================
+// Test build: disable Firestore completely (localStorage only)
+const ENABLE_FIRESTORE = false;
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyDba_44vuyh-DyXeSYUoppm925oFCfr010",
   authDomain: "stock-count-1d6e7.firebaseapp.com",
@@ -651,7 +653,11 @@ let _firestoreSyncTimer = null;
 let _pinVerified = false;
 let _pmUnsubscribe = null;
 let _pmListenerReady = false;
-function initFirebase(){if(!firebase.apps.length)firebase.initializeApp(FIREBASE_CONFIG);_db=firebase.firestore();}
+function initFirebase(){
+  if(!ENABLE_FIRESTORE){_db=null;return;}
+  if(!firebase.apps.length)firebase.initializeApp(FIREBASE_CONFIG);
+  _db=firebase.firestore();
+}
 function getSessionId(){return currentBranch;}
 function lsKey(){return`stockCountSession_${currentBranch||'default'}`;}
 function getProductMasterMetaRef(){return _db.collection('stock_sessions').doc('global_pm');}
@@ -691,7 +697,7 @@ function applyProductMasterMeta(pmMeta){
   else if(state.productMasterData.length){_setPmTs('พร้อมใช้งาน');}
 }
 function startProductMasterListener(){
-  if(!_db||!_pinVerified)return;
+  if(!ENABLE_FIRESTORE||!_db||!_pinVerified)return;
   stopProductMasterListener();
   _pmUnsubscribe=getProductMasterMetaRef().onSnapshot(doc=>{
     if(!doc.exists)return;
@@ -714,11 +720,16 @@ async function verifyPin(){
   // โหลดข้อมูลสาขาที่เลือกไว้
   loadSession();
   updateBranchDisplay();
-  await restoreFromFirestore();
-  startProductMasterListener();
+  if(ENABLE_FIRESTORE){
+    await restoreFromFirestore();
+    startProductMasterListener();
+  }else{
+    document.getElementById('dbStatus').textContent='Local Only (Test)';
+    const cb=document.getElementById('btnCloud'); if(cb) cb.style.display='none';
+  }
   rebuildScanListMap();
   renderScanList();updateStats();renderTable();
-  if(state.r01Data.length&&state.r05Data.length) syncMasterToFirestore();
+  if(ENABLE_FIRESTORE && state.r01Data.length&&state.r05Data.length) syncMasterToFirestore();
 }
 function requestBranchChange(){
   if(state.scanData.size>0){
@@ -738,7 +749,7 @@ async function selectBranch(branch){
     clearTimeout(_firestoreSyncTimer);
     clearTimeout(_saveTimer);
     saveSession();
-    await syncToFirestore();
+    if(ENABLE_FIRESTORE) await syncToFirestore();
   }
   currentBranch=branch;localStorage.setItem('selectedBranch',branch);
   document.getElementById('branchModal').style.display='none';
@@ -758,8 +769,14 @@ async function selectBranch(branch){
   ['ProductMaster','R01','R05','R16'].forEach(k=>{document.getElementById('badge'+k).textContent='ยังไม่โหลด';});
   _setR16Ts('');_setPmTs('');
   rebuildMaps();renderScanList();updateStats();renderTable();updateConfirmBtn();
-  loadSession();await restoreFromFirestore(true);
-  startProductMasterListener();
+  loadSession();
+  if(ENABLE_FIRESTORE){
+    await restoreFromFirestore(true);
+    startProductMasterListener();
+  }else{
+    document.getElementById('dbStatus').textContent='Local Only (Test)';
+    const cb=document.getElementById('btnCloud'); if(cb) cb.style.display='none';
+  }
 }
 
 // ===================== State =====================
@@ -1018,6 +1035,10 @@ function loadSession() {
 }
 window.addEventListener('DOMContentLoaded',async()=>{
   initFirebase();
+  if(!ENABLE_FIRESTORE){
+    const s=document.getElementById('dbStatus'); if(s) s.textContent='Local Only (Test)';
+    const cb=document.getElementById('btnCloud'); if(cb) cb.style.display='none';
+  }
   initColResize();
   screen.orientation?.lock('portrait').catch(()=>{});
   // ทุกครั้งที่เปิด → บังคับเลือกสาขา + ใส่ PIN ก่อนเสมอ
@@ -1647,7 +1668,7 @@ function restoreSession(event){
 }
 
 async function syncMasterToFirestore(){
-  if(!_db||!currentBranch)return;
+  if(!ENABLE_FIRESTORE||!_db||!currentBranch)return;
   const id=getSessionId();
   try{
     await Promise.all([
@@ -1658,14 +1679,14 @@ async function syncMasterToFirestore(){
 }
 
 async function syncProductMasterToFirestore(){
-  if(!_db||!currentBranch||!state.productMasterData.length)return;
+  if(!ENABLE_FIRESTORE||!_db||!currentBranch||!state.productMasterData.length)return;
   try{
     await getProductMasterMetaRef().set({data_json:JSON.stringify(state.productMasterData),row_count:state.productMasterData.length,updated_at:firebase.firestore.FieldValue.serverTimestamp(),updated_at_text:state.productMasterUploadedAt||formatThaiDateTime(new Date())});
   }catch(e){console.warn('Firestore product master sync:',e.message);}
 }
 
 async function restoreMasterFromFirestore(force=false){
-  if(!_db||!currentBranch)return;
+  if(!ENABLE_FIRESTORE||!_db||!currentBranch)return;
   const id=getSessionId();
   // R01/R05: ข้ามถ้ามีแล้วและไม่ force
   if(force||!state.r01Data.length||!state.r05Data.length){
@@ -1697,7 +1718,7 @@ async function restoreMasterFromFirestore(force=false){
 }
 
 async function syncToFirestore(){
-  if(_adminMode||!_db||!currentBranch)return;
+  if(!ENABLE_FIRESTORE||_adminMode||!_db||!currentBranch)return;
   const sdObj={};for(const[k,v]of state.scanData.entries()){const{scannedBy,auditor,retries,scans,...keep}=v;sdObj[k]=keep;}
   const slObj={};for(const[k,v]of scanListMap.entries())slObj[k]=v;
   const r16Obj={};for(const[k,v]of state.r16SalesMap.entries())r16Obj[k]=v;
@@ -1709,13 +1730,14 @@ async function syncToFirestore(){
 }
 
 async function pullFromCloud(){
+  if(!ENABLE_FIRESTORE){toast('โหมดทดสอบ: ปิด Cloud แล้ว','info');return;}
   if(!_db||!currentBranch){toast('ไม่สามารถเชื่อมต่อ Firestore','warn');return;}
   await restoreFromFirestore(true);
   toast('ดึงข้อมูลจาก Cloud สำเร็จ','success');
 }
 
 async function restoreFromFirestore(force=false){
-  if(!_db||!currentBranch)return;
+  if(!ENABLE_FIRESTORE||!_db||!currentBranch)return;
   document.getElementById('dbStatus').textContent='Loading...';
   try{
     // PM ดึงจาก Firestore เสมอ (badge ต้องแสดง)
